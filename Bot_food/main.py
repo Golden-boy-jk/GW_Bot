@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton # клавиатуру можно сделать поинтересней
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove # клавиатуру можно сделать поинтересней
 # from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import CHAT_ID_GENERAL, CHAT_ID_COURIER
@@ -35,7 +35,7 @@ class CourierRequest(StatesGroup):
     item_description = State()
     deadline = State()
     comment = State()
-    attachments = State()
+
 
 class CourierServiceRequest(StatesGroup):
     service_type = State()
@@ -48,6 +48,9 @@ class CourierServiceRequest(StatesGroup):
     sender_name = State()
     sender_address = State()
     sender_phone = State()
+    document_name = State()
+    spb_recipient = State()
+    attachments = State()
 
 class MeetingRequest(StatesGroup):
     date = State()
@@ -131,6 +134,8 @@ async def process_department(message: types.Message, state: FSMContext):
 @dp.message(RequestPass.position)
 async def process_position(message: types.Message, state: FSMContext):
     data = await state.get_data()
+
+    # Формируем текст для отправки
     text = (f"📋 Заявка на пропуск\n"
             f"Организация: {data['organization']}\n"
             f"ФИО: {data['full_name']}\n"
@@ -138,11 +143,21 @@ async def process_position(message: types.Message, state: FSMContext):
             f"Отдел: {data['department']}\n"
             f"Должность: {data.get('position', 'Не указано')}\n"
             f"Отправитель: {message.from_user.username}")
-    await bot.send_message(CHAT_ID_GENERAL, text)
-    await message.answer("Готово! Ваша заявка на пропуск отправлена, срок готовности: 1-2 дня.\n"
-                         "Забрать пропуск можно в офисе по адресу: ул. Миллионная, д.6\n"
-                         "Для этого обратитесь, пожалуйста, к офис-менеджеру.")
-    await state.clear()
+
+    try:
+        # Проверяем отправку сообщения
+        await bot.send_message(CHAT_ID_GENERAL, text)
+        await message.answer("Готово! Ваша заявка на пропуск отправлена, срок готовности: 1-2 дня.\n"
+                             "Забрать пропуск можно в офисе по адресу: ул. Миллионная, д.6\n"
+                             "Для этого обратитесь, пожалуйста, к офис-менеджеру.")
+    except Exception as e:
+        # Логирование и сообщение об ошибке
+        print(f"Не удалось отправить сообщение в чат {CHAT_ID_GENERAL}: {e}")
+        await message.answer("Произошла ошибка при отправке заявки. Попробуйте позже.")
+    finally:
+        # Завершаем состояние
+        await state.clear()
+
 
 # Заявка на офисного курьера
 @dp.message(lambda message: message.text == "Заявка на офисного курьера")
@@ -152,79 +167,109 @@ async def courier_request(message: types.Message, state: FSMContext):
                          "Для того, чтобы создать заявку на офисного курьера ответьте на следующие вопросы:\n"
                          "Адрес (откуда):")
 
-@dp.message(CourierRequest.from_address)
-async def process_from_address(message: types.Message, state: FSMContext):
-    await state.update_data(from_address=message.text)
-    await state.set_state(CourierRequest.sender_info)
-    await message.answer("Отправитель и номер телефона:")
+@dp.message(CourierServiceRequest.recipient_name)
+async def process_recipient_name(message: types.Message, state: FSMContext):
+    await state.update_data(recipient_name=message.text)
+    await state.set_state(CourierServiceRequest.recipient_address)
+    await message.answer("Введите адрес (куда доставить / откуда забираем):")
 
-@dp.message(CourierRequest.sender_info)
-async def process_sender_info(message: types.Message, state: FSMContext):
-    await state.update_data(sender_info=message.text)
-    await state.set_state(CourierRequest.to_address)
-    await message.answer("Куда (адрес):")
+@dp.message(CourierServiceRequest.recipient_address)
+async def process_recipient_address(message: types.Message, state: FSMContext):
+    await state.update_data(recipient_address=message.text)
+    await state.set_state(CourierServiceRequest.recipient_phone)
+    await message.answer("Введите телефон получателя / отправителя:")
 
-@dp.message(CourierRequest.to_address)
-async def process_to_address(message: types.Message, state: FSMContext):
-    await state.update_data(to_address=message.text)
-    await state.set_state(CourierRequest.recipient_info)
-    await message.answer("Получатель и номер телефона:")
+@dp.message(CourierServiceRequest.recipient_phone)
+async def process_recipient_phone(message: types.Message, state: FSMContext):
+    await state.update_data(recipient_phone=message.text)
+    await state.set_state(CourierServiceRequest.document_name)
+    await message.answer("Введите наименование документов:")
 
-@dp.message(CourierRequest.recipient_info)
-async def process_recipient_info(message: types.Message, state: FSMContext):
-    await state.update_data(recipient_info=message.text)
-    await state.set_state(CourierRequest.item_description)
-    await message.answer("Наименование (документы или груз):")
+@dp.message(CourierServiceRequest.document_name)
+async def process_document_name(message: types.Message, state: FSMContext):
+    await state.update_data(document_name=message.text)
+    await state.set_state(CourierServiceRequest.deadline)
+    await message.answer("Введите крайний срок отправки / забора документов:")
 
-@dp.message(CourierRequest.item_description)
-async def process_item_description(message: types.Message, state: FSMContext):
-    await state.update_data(item_description=message.text)
-    await state.set_state(CourierRequest.deadline)
-    await message.answer("Крайний срок доставки:")
-
-@dp.message(CourierRequest.deadline)
+@dp.message(CourierServiceRequest.deadline)
 async def process_deadline(message: types.Message, state: FSMContext):
     await state.update_data(deadline=message.text)
-    await state.set_state(CourierRequest.comment)
-    await message.answer("Комментарий: (требуется пропуск, позвонить заранее и т.д.):")
+    await state.set_state(CourierServiceRequest.comment)
+    await message.answer("Введите комментарий (если есть):")
 
-@dp.message(CourierRequest.comment)
+@dp.message(CourierServiceRequest.comment)
 async def process_comment(message: types.Message, state: FSMContext):
     await state.update_data(comment=message.text)
-    await state.set_state(CourierRequest.attachments)
-    await message.answer("Требуется вложить изображения/документы?")
 
-@dp.message(CourierRequest.attachments)
-async def process_attachments(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    text = (f"📦 Заявка на офисного курьера\n"
-            f"Откуда: {data['from_address']}\n"
-            f"Отправитель: {data['sender_info']}\n"
-            f"Куда: {data['to_address']}\n"
-            f"Получатель: {data['recipient_info']}\n"
-            f"Документы/Груз: {data['item_description']}\n"
-            f"Крайний срок доставки: {data['deadline']}\n"
-            f"Комментарий: {data['comment']}\n"
-            f"Отправитель: {message.from_user.username}")
-    await bot.send_message(chat_id=CHAT_ID_COURIER, text="Ваш текст")
-    await message.answer("Готово! Ваша заявка принята.")
-    await state.clear()
+
+    summary = (
+        f"📦 **Заявка на курьерскую службу**\n"
+        f"Тип: {data.get('service_type')}\n"
+        f"Имя: {data.get('recipient_name')}\n"
+        f"Адрес: {data.get('recipient_address')}\n"
+        f"Телефон: {data.get('recipient_phone')}\n"
+        f"Документы: {data.get('document_name')}\n"
+        f"Срок: {data.get('deadline')}\n"
+        f"Комментарий: {data.get('comment')}\n"
+    )
+
+    # Если "Мы получаем", добавляем имя получателя в СПБ
+    if data.get("service_type") == "получение":
+        await state.set_state(CourierServiceRequest.spb_recipient)
+        await message.answer("Введите имя получателя в СПБ (кому передать):")
+    else:
+        await message.answer(summary)
+        await state.clear()  # Очищаем состояние
+
+@dp.message(CourierServiceRequest.spb_recipient)
+async def process_spb_recipient(message: types.Message, state: FSMContext):
+    await state.update_data(spb_recipient=message.text)
+    data = await state.get_data()
+
+    summary = (
+        f"📦 **Заявка на курьерскую службу**\n"
+        f"Тип: {data.get('service_type')}\n"
+        f"Имя отправителя: {data.get('recipient_name')}\n"
+        f"Адрес: {data.get('recipient_address')}\n"
+        f"Телефон: {data.get('recipient_phone')}\n"
+        f"Документы: {data.get('document_name')}\n"
+        f"Срок: {data.get('deadline')}\n"
+        f"Комментарий: {data.get('comment')}\n"
+        f"Получатель в СПБ: {data.get('spb_recipient')}\n"
+    )
+
+    await message.answer(summary)
+    await state.clear()  # Очищаем состояние
+
 
 # Заявка на курьерскую службу
+courier_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Мы отправляем")],
+        [KeyboardButton(text="Мы получаем")]
+    ],
+    resize_keyboard=True,  # Автоматическое изменение размера клавиатуры
+    one_time_keyboard=True  # Клавиатура исчезнет после нажатия кнопки
+)
+
 @dp.message(lambda message: message.text == "Заявка на курьерскую службу (KSE)")
 async def courier_service_request(message: types.Message, state: FSMContext):
     await state.set_state(CourierServiceRequest.service_type)
-    await message.answer("Тип курьерской службы:\nВыберите: Мы отправляем или Мы получаем")
+    await message.answer("Выберите тип курьерской службы:", reply_markup=courier_keyboard)
 
-@dp.message(CourierServiceRequest.service_type)
-async def process_service_type(message: types.Message, state: FSMContext):
-    await state.update_data(service_type=message.text)
-    if message.text == "Мы отправляем":
-        await state.set_state(CourierServiceRequest.recipient_name)
-        await message.answer("Имя получателя:")
-    elif message.text == "Мы получаем":
-        await state.set_state(CourierServiceRequest.sender_name)
-        await message.answer("Имя отправителя:")
+@dp.message(lambda message: message.text in ["Мы отправляем", "Мы получаем"])
+async def process_courier_choice(message: types.Message, state: FSMContext):
+    choice = "отправка" if message.text == "Мы отправляем" else "получение"
+    await state.update_data(service_type=choice)
+
+    await state.set_state(CourierServiceRequest.recipient_name)
+    if choice == "отправка":
+        await message.answer("Введите имя получателя:", reply_markup=types.ReplyKeyboardRemove())
+    else:
+        await message.answer("Введите имя отправителя:", reply_markup=types.ReplyKeyboardRemove())
+
+
 
 async def main():
     await dp.start_polling(bot)
