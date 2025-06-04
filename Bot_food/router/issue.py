@@ -2,18 +2,28 @@ from aiogram import Router, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from Bot_food.config import CHAT_ID_GENERAL
 
 router = Router()
 
-# Клавиатура с выбором типа проблемы
+# Клавиатура выбора типа проблемы
 problem_type_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
         [
-            InlineKeyboardButton(text="Поломка", callback_data="problem_breakdown"),
-            InlineKeyboardButton(text="Подменная техника", callback_data="problem_replacement"),
+            InlineKeyboardButton(
+                text="Поломка (заменить лампочку, починить стул и т.д.)",
+                callback_data="problem_breakdown"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Подменная техника (наушники, мышь, зарядка и т.д.)",
+                callback_data="problem_replacement"
+            )
         ]
     ]
 )
+
 
 # Состояния
 class ProblemRequest(StatesGroup):
@@ -21,46 +31,65 @@ class ProblemRequest(StatesGroup):
     problem_description = State()
 
 
-# Обработка команды "Сообщить о проблеме/поломке"
-@router.message(lambda message: message.text.lower() == "сообщить о проблеме")
+# Формирование текста сообщения для админа
+def format_problem_report(data: dict, user: types.User) -> str:
+    problem_type = (
+        "Поломка"
+        if data["problem_type"] == "problem_breakdown"
+        else "Подменная техника"
+    )
+    return (
+        f"📢 Новая заявка на проблему!\n\n"
+        f"Тип проблемы: {problem_type}\n"
+        f"Описание: {data['problem_description']}\n\n"
+        f"Пользователь: @{user.username or 'не указан'}\n"
+        f"User ID: {user.id}"
+    )
+
+
+# Команда: Сообщить о проблеме
+@router.message(lambda msg: msg.text and msg.text.lower() == "сообщить о проблеме")
 async def problem_request(message: types.Message, state: FSMContext):
     await state.set_state(ProblemRequest.problem_type)
     await message.answer(
-        "Пожалуйста, выберите тип проблемы:",
-        reply_markup=problem_type_keyboard
+        "Пожалуйста, выберите тип проблемы:", reply_markup=problem_type_keyboard
     )
 
 
-# Обработка выбора типа проблемы
+# Выбор типа проблемы
 @router.callback_query(lambda c: c.data in ["problem_breakdown", "problem_replacement"])
 async def handle_problem_type(callback: CallbackQuery, state: FSMContext):
-    # Сохраняем тип проблемы
     await state.update_data(problem_type=callback.data)
-
-    await callback.message.edit_text(
-        "Пожалуйста, опишите ситуацию:"
-    )
+    await callback.message.edit_text("Пожалуйста, опишите ситуацию:")
     await state.set_state(ProblemRequest.problem_description)
     await callback.answer()
 
 
-# Обработка описания проблемы
+# Ввод описания проблемы
 @router.message(ProblemRequest.problem_description)
 async def handle_problem_description(message: types.Message, state: FSMContext):
-    # Сохраняем описание проблемы
     await state.update_data(problem_description=message.text)
-
-    # Получаем все данные
     data = await state.get_data()
 
-    # Формируем итоговое сообщение
-    problem_type = "Поломка" if data['problem_type'] == "problem_breakdown" else "Подменная техника"
-    description = data['problem_description']
+    # Отправка админу
+    try:
+        await message.bot.send_message(
+            CHAT_ID_GENERAL, format_problem_report(data, message.from_user)
+        )
+    except Exception as e:
+        print(f"Ошибка при отправке админу: {e}")
 
-    # Подтверждение, что заявка отправлена
+    # Ответ пользователю
+    problem_type = (
+        "Поломка"
+        if data["problem_type"] == "problem_breakdown"
+        else "Подменная техника"
+    )
     await message.answer(
-        f"Спасибо, ваша заявка отправлена!\n\nТип проблемы: {problem_type}\nОписание: {description}\nХорошего дня!"
+        f"Спасибо, ваша заявка отправлена!\n\n"
+        f"Тип проблемы: {problem_type}\n"
+        f"Описание: {data['problem_description']}\n"
+        f"Хорошего дня! 🌞"
     )
 
-    # Очищаем состояние
     await state.clear()

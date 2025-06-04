@@ -1,24 +1,31 @@
+import logging
+import re
+import os
+import tempfile
+from enum import Enum
+from aiogram import types, Router, F
+from aiogram.filters import Command
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    CallbackQuery, Message, ReplyKeyboardMarkup,
+    KeyboardButton, PhotoSize
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram import Router, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
+from Bot_food.config import CHAT_ID_OFFICE_COURIER  # int
+
+# --- Настройка логгера ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# --- Инициализация роутера ---
 router = Router()
 
-# Клавиатура подтверждения
-confirm_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="✅ Подтвердить", callback_data="confirm_request"
-            ),
-            InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_request"),
-        ]
-    ]
-)
-
-
-# Состояния
+# --- FSM: состояния заявки ---
 class CourierRequest(StatesGroup):
     from_address = State()
     sender_info = State()
@@ -28,138 +35,210 @@ class CourierRequest(StatesGroup):
     deadline = State()
     comment = State()
     attachment = State()
+    confirmation = State()
 
+# --- Enum для callback_data ---
+class Callbacks(str, Enum):
+    CONFIRM = "confirm_request"
+    CANCEL = "cancel_request"
 
-# Обработка начала заявки
-@router.message(lambda message: message.text == "Заявка на офисного курьера")
-async def courier_request(message: types.Message, state: FSMContext):
+# --- Клавиатуры ---
+attach_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📎 Приложить файл"), KeyboardButton(text="❌ Пропустить")]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=True,
+)
+
+confirm_keyboard = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=Callbacks.CONFIRM.value),
+            InlineKeyboardButton(text="❌ Отменить", callback_data=Callbacks.CANCEL.value),
+        ]
+    ]
+)
+
+# --- Экранирование MarkdownV2 ---
+def escape_md_v2(text: str) -> str:
+    if not text:
+        return "-"
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!\\])', r'\\\1', text)
+
+# --- Обработчик команды /chatid ---
+@router.message(Command("chatid"))
+async def chat_id_handler(message: Message):
+    await message.answer(f"Этот чат имеет ID: `{message.chat.id}`", parse_mode="Markdown")
+
+# --- Старт заявки ---
+@router.message(F.text == "Заявка на офисного курьера")
+async def start_request(message: Message, state: FSMContext):
+    logger.info(f"Пользователь {message.from_user.id} начал оформление заявки.")
     await state.set_state(CourierRequest.from_address)
-    await message.answer(
-        "Заявки оформляются за 1 день и более, доставка по СПБ и ближайшей области.\n"
-        "Адрес (откуда):"
-    )
+    await state.update_data(user_id=message.from_user.id)
+    await message.answer("Заявки оформляются за 1 день и более, "
+                         "доставка по СПБ и ближайшей области. "
+                         "Для того, чтобы создать заявку на офисного курьера "
+                         "ответьте на следующие вопросы:.\n\n📍 Введите адрес (откуда забрать):")
 
-
+# --- Обработчики FSM состояний ---
 @router.message(CourierRequest.from_address)
-async def process_from_address(message: types.Message, state: FSMContext):
+async def process_from_address(message: Message, state: FSMContext):
     await state.update_data(from_address=message.text)
     await state.set_state(CourierRequest.sender_info)
-    await message.answer("Введите данные отправителя:")
-
+    await message.answer("📨 Введите данные отправителя:")
 
 @router.message(CourierRequest.sender_info)
-async def process_sender_info(message: types.Message, state: FSMContext):
+async def process_sender_info(message: Message, state: FSMContext):
     await state.update_data(sender_info=message.text)
     await state.set_state(CourierRequest.to_address)
-    await message.answer("Введите адрес (куда доставить):")
-
+    await message.answer("👜 Введите адрес доставки (куда):")
 
 @router.message(CourierRequest.to_address)
-async def process_to_address(message: types.Message, state: FSMContext):
+async def process_to_address(message: Message, state: FSMContext):
     await state.update_data(to_address=message.text)
     await state.set_state(CourierRequest.recipient_info)
-    await message.answer("Введите данные получателя:")
-
+    await message.answer("👤 Введите данные получателя:")
 
 @router.message(CourierRequest.recipient_info)
-async def process_recipient_info(message: types.Message, state: FSMContext):
+async def process_recipient_info(message: Message, state: FSMContext):
     await state.update_data(recipient_info=message.text)
     await state.set_state(CourierRequest.item_description)
-    await message.answer("Что доставляем? Опишите:")
-
+    await message.answer("📦 Что нужно доставить?")
 
 @router.message(CourierRequest.item_description)
-async def process_item_description(message: types.Message, state: FSMContext):
+async def process_item_description(message: Message, state: FSMContext):
     await state.update_data(item_description=message.text)
     await state.set_state(CourierRequest.deadline)
-    await message.answer("Крайний срок доставки:")
-
+    await message.answer("⏒ Крайний срок доставки:")
 
 @router.message(CourierRequest.deadline)
-async def process_deadline(message: types.Message, state: FSMContext):
+async def process_deadline(message: Message, state: FSMContext):
     await state.update_data(deadline=message.text)
     await state.set_state(CourierRequest.comment)
-    await message.answer("Комментарий (если есть):")
-
+    await message.answer("💬 Комментарий: (требуется пропуск, позвонить заранее и т.д.):")
 
 @router.message(CourierRequest.comment)
-async def process_comment(message: types.Message, state: FSMContext):
+async def process_comment(message: Message, state: FSMContext):
     await state.update_data(comment=message.text)
     await state.set_state(CourierRequest.attachment)
-    await message.answer(
-        "Хотите приложить изображение или документ?\n"
-        "📎 Просто отправьте файл или нажмите 'Пропустить'",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Пропустить", callback_data="skip_attachment"
-                    )
-                ]
-            ]
-        ),
-    )
+    await message.answer("📎 Хотите приложить файл?", reply_markup=attach_keyboard)
 
+# --- Обработка вложений ---
+
+@router.message(CourierRequest.attachment, F.document)
+async def handle_document(message: Message, state: FSMContext):
+    await state.update_data(file_id=message.document.file_id, file_type="document")
+    await message.answer("📎 Файл получен.")
+    await prepare_confirmation(message, state)
+
+@router.message(CourierRequest.attachment, F.photo)
+async def handle_photo(message: Message, state: FSMContext):
+    photo: PhotoSize = message.photo[-1]
+    await state.update_data(file_id=photo.file_id, file_type="photo")
+    await message.answer("🖼 Фото получено.")
+    await prepare_confirmation(message, state)
+
+@router.message(CourierRequest.attachment, F.text.in_(["❌ Пропустить"]))
+async def skip_attachment(message: Message, state: FSMContext):
+    await prepare_confirmation(message, state)
+
+@router.message(CourierRequest.attachment, F.text.in_(["📎 Приложить файл"]))
+async def ask_for_attachment(message: Message):
+    await message.answer("📤 Отправьте фото или документ одним сообщением:")
 
 @router.message(CourierRequest.attachment)
-async def process_attachment(message: types.Message, state: FSMContext):
-    file_id = None
-    if message.photo:
-        file_id = message.photo[-1].file_id
-    elif message.document:
-        file_id = message.document.file_id
-    else:
-        await message.answer("Пожалуйста, отправьте изображение или документ.")
-        return
+async def invalid_attachment(message: Message):
+    await message.answer("❗ Отправьте фото, документ или нажмите 'Пропустить'.")
 
-    await state.update_data(attachment=file_id)
-    await show_summary(message, state)
+# --- Утилита для скачивания файла ---
+async def download_file(bot, file_id) -> str:
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+    suffix = os.path.splitext(file_path)[-1] or ""
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    await bot.download_file(file_path, tmp_file.name)
+    tmp_file.close()
+    return tmp_file.name
 
-
-@router.callback_query(lambda c: c.data == "skip_attachment")
-async def skip_attachment(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(attachment=None)
-    await callback.answer()
-    await show_summary(callback.message, state)
-
-
-# Подтверждение / отмена
-@router.callback_query(lambda c: c.data in ["confirm_request", "cancel_request"])
-async def handle_confirmation(callback: CallbackQuery, state: FSMContext):
-    if callback.data == "confirm_request":
-        data = await state.get_data()
-        await callback.message.answer("✅ Заявка подтверждена и отправлена!")
-        # Здесь можно отправить админу
-        # await bot.send_message(ADMIN_ID, форматированный_текст)
-    else:
-        await callback.message.answer("❌ Заявка отменена.")
-
-    await state.clear()
-    await callback.answer()
-
-
-# Финальный вывод заявки
-async def show_summary(message: types.Message, state: FSMContext):
+# --- Формируем сообщение подтверждения ---
+async def prepare_confirmation(message: Message, state: FSMContext):
     data = await state.get_data()
 
+    def safe(key):
+        return escape_md_v2(data.get(key, "-"))
+
     summary = (
-        "📦 **Заявка на офисного курьера**\n"
-        f"**Откуда:** {data['from_address']}\n"
-        f"**Отправитель:** {data['sender_info']}\n"
-        f"**Куда:** {data['to_address']}\n"
-        f"**Получатель:** {data['recipient_info']}\n"
-        f"**Что доставить:** {data['item_description']}\n"
-        f"**Срок:** {data['deadline']}\n"
-        f"**Комментарий:** {data['comment'] or '-'}"
+        "🤖 *BotCorp CourierBot*\n"
+        "📦 *Новая заявка на офисного курьера*\n"
+        f"📍 *Откуда:* {safe('from_address')}\n"
+        f"📨 *Отправитель:* {safe('sender_info')}\n"
+        f"👜 *Куда:* {safe('to_address')}\n"
+        f"👤 *Получатель:* {safe('recipient_info')}\n"
+        f"📦 *Что доставить:* {safe('item_description')}\n"
+        f"⏒ *Срок:* {safe('deadline')}\n"
+        f"💬 *Комментарий:* {safe('comment')}\n"
     )
 
-    await message.answer(summary, parse_mode="Markdown")
+    logger.debug("Сформировано сообщение подтверждения:\n%s", summary)
+    await state.update_data(summary_text=summary)
+    await state.set_state(CourierRequest.confirmation)
+    await message.answer(summary, reply_markup=confirm_keyboard, parse_mode="MarkdownV2")
 
-    if data.get("attachment"):
-        # Отправляем файл, если он есть
-        try:
-            await message.answer_document(data["attachment"])
-        except Exception:
-            await message.answer("⚠️ Не удалось отправить вложение.")
+# --- Обработка подтверждения ---
+@router.callback_query(F.data == Callbacks.CONFIRM.value)
+async def confirm_request(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    user_id = data.get("user_id")
+    logger.info(f"Заявка подтверждена пользователем {user_id}")
+    logger.info(f"Отправка заявки в чат {CHAT_ID_OFFICE_COURIER}")
 
-    await message.answer("Подтвердите заявку:", reply_markup=confirm_keyboard)
+    try:
+        # Отправляем текст заявки
+        await callback.bot.send_message(
+            CHAT_ID_OFFICE_COURIER,
+            data.get("summary_text", "-"),
+            parse_mode="MarkdownV2"
+        )
+
+        file_id = data.get("file_id")
+        file_type = data.get("file_type")
+
+        if file_id and file_type in ("document", "photo"):
+            local_path = await download_file(callback.bot, file_id)
+            caption = "📎 Вложение к заявке"
+
+            try:
+                with open(local_path, "rb") as f:
+                    if file_type == "document":
+                        await callback.bot.send_document(
+                            CHAT_ID_OFFICE_COURIER,
+                            document=f,
+                            caption=caption
+                        )
+                    elif file_type == "photo":
+                        await callback.bot.send_photo(
+                            CHAT_ID_OFFICE_COURIER,
+                            photo=f,
+                            caption=caption
+                        )
+            finally:
+                os.remove(local_path)
+        else:
+            logger.warning("Вложение не найдено или тип неизвестен")
+
+        await callback.message.answer("✅ Заявка успешно отправлена!")
+        await state.clear()
+
+    except Exception:
+        logger.exception("Ошибка при отправке заявки")
+        await callback.message.answer("❗ Ошибка при отправке заявки. Попробуйте позже.")
+
+# --- Обработка отмены ---
+@router.callback_query(F.data == Callbacks.CANCEL.value)
+async def cancel_request(callback: CallbackQuery, state: FSMContext):
+    user_id = (await state.get_data()).get("user_id")
+    logger.info(f"Пользователь {user_id} отменил оформление заявки.")
+    await callback.message.answer("❌ Заявка отменена.")
+    await state.clear()

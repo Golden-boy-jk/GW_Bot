@@ -1,6 +1,16 @@
-# ID чатов для заявок (замени на свои)
-CHAT_ID_GENERAL = -1001234567890  # общий чат для всех заявок
-CHAT_ID_COURIER = -1009876543210  # чат для офисных курьеров
-CHAT_ID_OTHER_REQUESTS = (
-    -1001122334455
-)  # чат для других заявок (например, канцелярия, встреча и тд.)
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+ADMINS = list(map(int, os.getenv("ADMINS", "").split(",")))
+
+CHAT_ID_GENERAL = int(os.getenv("CHAT_ID_GENERAL"))
+CHAT_ID_OFFICE_COURIER = int(os.getenv("CHAT_ID_OFFICE_COURIER"))
+CHAT_ID_KSE = int(os.getenv("CHAT_ID_KSE"))
+
+
+CHAT_IDS = {
+    "офисный курьер": CHAT_ID_OFFICE_COURIER,
+    "курьерская служба": CHAT_ID_KSE,
+}
