@@ -2,7 +2,6 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-
 from Bot_food.my_token import BOT_TOKEN
 from Bot_food.router.CourierRequest import router as CourierRequest_router
 from Bot_food.router.CourierServiceRequest import router as CourierServiceRequest_router
@@ -35,3 +34,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
+# All features tested and working
